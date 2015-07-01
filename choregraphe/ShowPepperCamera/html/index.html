@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="/libs/qimessaging/1.0/jquery.min.js"></script>
+<script src="/libs/qimessaging/1.0/socket.io.min.js"></script>
+<script src="/libs/qimessaging/1.0/qimessaging.js"></script>
+</head>
+<body>
+<canvas class="pepper_image"></canvas><br>
+<div id="debug">
+
+</div>
+<script>
+// 開始/終了時にメッセージ表示
+(function($){
+	var pepper = {},
+		$debug = $('#debug');
+
+	pepper.qi = new QiSession();
+	pepper.qi.socket().on('connect', function(){
+		$debug.append('connect<br>');
+	}).on('disconnect', function(){
+		$debug.append('disconnect<br>');
+	});
+
+	function onError(err) {
+		$debug.append(err + '<br>');
+	}
+
+	// メモリ取得
+	pepper.qi.service('ALMemory').done(function(ALMemory){
+		$debug.append('memory<br>');
+		// イベント登録
+		ALMemory.subscriber('startPreview').done(function(sub){
+			$debug.append('startPreview:subscribe<br>');
+			sub.signal.connect(function(st){
+				$debug.append('start<br>');
+				startPreview();
+			});
+		}).fail(onError);
+		ALMemory.subscriber('stopPreview').done(function(sub){
+			$debug.append('stopPreview:subscribe<br>');
+			sub.signal.connect(function(st){
+				$debug.append('stop<br>');
+				stopPreview();
+			});
+		}).fail(onError);
+	}).fail(onError);
+
+	function startPreview() {
+		pepper.qi.service('ALVideoDevice').done(function(ALVideoDevice){
+			pepper.video = ALVideoDevice;
+			pepper.video.subscribeCamera(
+				'test_capture',
+				0, // cameraId kTop kBottom kInfred(color:17)
+				1, // 320x240 8,7,0,1,2,3
+				0, // 0:monochrome, 9:YUV, 11:RGB http://doc.aldebaran.com/2-1/family/robots/video_robot.html#cameracolorspace-mt9m114
+				10 // framerate 1~30
+			).done(function(res){
+				pepper.video.id = res;
+				$debug.append(res + '<br>');
+				var $cvs = $('.pepper_image');
+
+				// 画像の取得
+				function getPicture() {
+					pepper.video
+						.getImageRemote(pepper.video.id)
+						.done(function(res){
+							drawCaptureImage(res, $cvs);
+							setTimeout(getPicture, 10);
+						});
+				}
+				getPicture();
+			});
+		}).fail(onError);
+	}
+
+	function stopPreview() {
+		if (pepper.video && pepper.video.id) {
+			pepper.video.unsubscribe(pepper.video.id);
+		}
+	}
+
+	// カメラ画像の描画
+	function drawCaptureImage(res, $cvs, timer) {
+		// [0]: width.
+		// [1]: height.
+		// [2]: number of layers.
+		// [3]: ColorSpace.
+		// [4]: time stamp (seconds).
+		// [5]: time stamp (micro-seconds).
+		// [6]: binary array of size height * width * nblayers containing image data.
+		// [7]: camera ID (kTop=0, kBottom=1).
+		// [8]: left angle (radian).
+		// [9]: topAngle (radian).
+		// [10]: rightAngle (radian).
+		// [11]: bottomAngle (radian).
+		//console.log(res);
+		var w = res[0], h = res[1], nb = res[2],
+			binary = window.atob(res[6]),
+			len = binary.length, m = len/nb;
+
+		//console.log(len);
+		$cvs.attr({width: w, height: h}).css({width: w, height: h});
+
+		var ctx = $cvs[0].getContext('2d');
+
+		var img = ctx.createImageData(w, h);
+		var pixs = img.data;
+
+		if (res[3] === 0 || res[3] === 17) { // monochrome
+			for (var i = 0; i < m; i++) {
+				pixs[i*4] = pixs[i*4+1] = pixs[i*4+2] = binary.charCodeAt(i*nb);
+				pixs[i*4+3] = 255;
+			}
+		} else if (res[3] === 11) { // RGB
+			for (var i = 0; i < m; i++) {
+				pixs[i*4] = binary.charCodeAt(i*nb);
+				pixs[i*4+1] = binary.charCodeAt(i*nb+1);
+				pixs[i*4+2] = binary.charCodeAt(i*nb+2);
+				pixs[i*4+3] = 255;
+			}
+		// TODO YUVの変換
+		} else { // 実験用
+			for (var i = 0; i < m; i++) {
+				pixs[i*4] = binary.charCodeAt(i*nb);
+				if (nb > 1) {
+					pixs[i*4+1] = binary.charCodeAt(i*nb+1);
+				} else {
+					pixs[i*4+1] = pixs[i*4];
+				}
+				if (nb > 2) {
+					pixs[i*4+2] = binary.charCodeAt(i*nb+2);
+				} else {
+					pixs[i*4+2] = pixs[i*4];
+				}
+				pixs[i*4+3] = 255;
+			}
+		}
+
+		ctx.putImageData(img, 0, 0);
+
+	}
+
+})(jQuery);
+</script>
+</body>
+</html>

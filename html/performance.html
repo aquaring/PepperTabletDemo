@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="js/jquery.min.js"></script>
+<script src="js/qimessaging.js"></script>
+</head>
+<body>
+	<select id="camera_id">
+		<option value="0">TOP</option>
+		<option value="1">BOTTOM</option>
+		<option value="2">IR</option>
+	</select>
+	<select id="camera_reso">
+		<option value="8">40x30</option>
+		<option value="7">80x60</option>
+		<option value="0">160x120</option>
+		<option value="1" selected>320x240</option>
+		<option value="2">640x480</option>
+		<option value="3">1280x960</option>
+	</select>
+	<select id="camera_colorspace">
+		<option value="0">Yuv</option>
+		<option value="1">yUv</option>
+		<option value="2">yuV</option>
+		<option value="3">Rgb</option>
+		<option value="4">rGb</option>
+		<option value="5">rgB</option>
+		<option value="6">Hsy</option>
+		<option value="7">hSy</option>
+		<option value="8">hsY</option>
+		<option value="9">YUV422</option>
+		<option value="10">YUV</option>
+		<option value="11">RGB</option>
+		<option value="12">HSY</option>
+		<option value="13">BGR</option>
+		<option value="14">YYCbCr</option>
+		<option value="15">H2RGB</option>
+		<option value="16">HSMixed</option>
+		<option value="17">Depth</option>
+	</select>
+	<button type="button" id="video_subscribe">SUBSCRIBE</button><br>
+	<canvas class="pepper_image"></canvas><br>
+	<button type="button" class="capture_start">START</button><br>
+	<p id="result">
+	</p>
+<script>
+var pepper = {};
+(function($){
+	var pepper_ip = "192.168.2.16";
+    pepper.qi = new QiSession(pepper_ip);
+	pepper.qi.socket().on('connect', function(){
+		console.log('pepper:connect');
+	}).on('disconnect', function(){
+		console.log('pepper:disconnect');
+	});
+
+    // ビデオデバイス取得
+    pepper.qi.service('ALVideoDevice').done(function(als){
+        pepper.video = als;
+        //subscribeCamera();
+		// カメラ登録
+		$('#video_subscribe').on('click', function(){
+			unsubscribeCamera();
+			subscribeCamera();
+		});
+		// カメラ画像の取得
+		$('.capture_start').on('click.capture', function(){
+			var $cvs = $('.pepper_image');
+			var count = 0, maxcount = 100, min = 100000, max = 0, avg = 0;
+
+			function getPicture() {
+				var start = new Date();
+				pepper.video
+					.getImageRemote(pepper.video.id)
+					.done(function(res){
+						var elapsed = drawCaptureImage(res, $cvs, start);
+						console.log(elapsed);
+						if (min > elapsed) {
+							min = elapsed;
+						}
+						if (max < elapsed) {
+							max = elapsed;
+						}
+						avg += elapsed;
+						if (++count < maxcount) {
+							setTimeout(getPicture, 100);
+						} else {
+							var result = 'min:' + min + ',max:' + max + ',avg:' + avg/maxcount;
+							$('#result').html(result)
+							console.log(result);
+						}
+					});
+			}
+
+			getPicture();
+		});
+        console.log('ALVideoDevice : OK');
+    }).fail(function(err){
+        console.log('ALVideoDevice : NG', err);
+    });
+
+
+
+    function unsubscribeCamera() {
+		if (pepper.video.id) {
+			pepper.video.unsubscribe(pepper.video.id);
+		}
+    }
+    function subscribeCamera() {
+        pepper.video.subscribeCamera(
+            'test_capture',
+            +$('#camera_id').val(), // cameraId kTop kBottom kInfred(color:17)
+            +$('#camera_reso').val(), // 320x240 8,7,0,1,2,3
+            +$('#camera_colorspace').val(), // 0:monochrome, 9:YUV, 11:RGB http://doc.aldebaran.com/2-1/family/robots/video_robot.html#cameracolorspace-mt9m114
+            10 // framerate 1~30
+        ).done(function(res){
+            console.log(res);
+            pepper.video.id = res;
+            pepper.video.getSubscribers().done(function(res){console.log(res);});
+        });
+    }
+
+    // カメラ画像の描画
+    function drawCaptureImage(res, $cvs, timer) {
+        // [0]: width.
+        // [1]: height.
+        // [2]: number of layers.
+        // [3]: ColorSpace.
+        // [4]: time stamp (seconds).
+        // [5]: time stamp (micro-seconds).
+        // [6]: binary array of size height * width * nblayers containing image data.
+        // [7]: camera ID (kTop=0, kBottom=1).
+        // [8]: left angle (radian).
+        // [9]: topAngle (radian).
+        // [10]: rightAngle (radian).
+        // [11]: bottomAngle (radian).
+        //console.log(res);
+        var w = res[0], h = res[1], nb = res[2],
+            binary = window.atob(res[6]),
+            len = binary.length, m = len/nb;
+
+        //console.log(len);
+        $cvs.attr({width: w, height: h}).css({width: w, height: h});
+
+        var ctx = $cvs[0].getContext('2d');
+
+        var img = ctx.createImageData(w, h);
+        var pixs = img.data;
+
+        if (res[3] === 0 || res[3] === 17) { // monochrome
+            for (var i = 0; i < m; i++) {
+                pixs[i*4] = pixs[i*4+1] = pixs[i*4+2] = binary.charCodeAt(i*nb);
+                pixs[i*4+3] = 255;
+            }
+        } else if (res[3] === 11) { // RGB
+            for (var i = 0; i < m; i++) {
+                pixs[i*4] = binary.charCodeAt(i*nb);
+                pixs[i*4+1] = binary.charCodeAt(i*nb+1);
+                pixs[i*4+2] = binary.charCodeAt(i*nb+2);
+                pixs[i*4+3] = 255;
+            }
+		// TODO YUVの変換
+        } else { // 実験用
+            for (var i = 0; i < m; i++) {
+                pixs[i*4] = binary.charCodeAt(i*nb);
+                if (nb > 1) {
+                    pixs[i*4+1] = binary.charCodeAt(i*nb+1);
+                } else {
+                    pixs[i*4+1] = pixs[i*4];
+                }
+                if (nb > 2) {
+                    pixs[i*4+2] = binary.charCodeAt(i*nb+2);
+                } else {
+                    pixs[i*4+2] = pixs[i*4];
+                }
+                pixs[i*4+3] = 255;
+            }
+        }
+
+        ctx.putImageData(img, 0, 0);
+
+        // pepper.video.unsubscribe(pepper.video.id).done(function(res){console.log(res)});
+        // delete pepper.video.id;
+        // $('.capture_start').off('click.capture');
+		return new Date() - timer;
+    }
+})(jQuery);
+</script>
+</body>
+</html>
